@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -119,13 +120,13 @@ func main() {
 			migrator.SourceESAPI = api
 		}
 
-		if (c.ScrollSliceSize < 1) {
+		if c.ScrollSliceSize < 1 {
 			c.ScrollSliceSize = 1
 		}
 
 		//fetchBar.ShowBar=false
 
-		totalSize := 0;
+		totalSize := 0
 		finishedSlice := 0
 		for slice := 0; slice < c.ScrollSliceSize; slice++ {
 			scroll, err := migrator.SourceESAPI.NewScroll(c.SourceIndexNames, c.ScrollTime, c.DocBufferCount, c.Query, slice, c.ScrollSliceSize, c.Fields)
@@ -164,7 +165,7 @@ func main() {
 					finishedSlice++
 
 					//clean up final results
-					if (finishedSlice == c.ScrollSliceSize) {
+					if finishedSlice == c.ScrollSliceSize {
 						log.Debug("closing doc chan")
 						close(migrator.DocChan)
 					}
@@ -172,7 +173,7 @@ func main() {
 			}
 		}
 
-		if (totalSize > 0) {
+		if totalSize > 0 {
 			fetchBar.Total = int64(totalSize)
 			outputBar.Total = int64(totalSize)
 		}
@@ -329,7 +330,7 @@ func main() {
 					log.Debug("target IndexSettings", targetIndexSettings)
 
 					//if there is only one index and we specify the dest indexname
-					if (c.SourceIndexNames != c.TargetIndexName && (len(c.TargetIndexName) > 0) && indexCount == 1) {
+					if c.SourceIndexNames != c.TargetIndexName && (len(c.TargetIndexName) > 0) && indexCount == 1 {
 						log.Debugf("only one index,so we can rewrite indexname, src:%v, dest:%v ,indexCount:%d", c.SourceIndexNames, c.TargetIndexName, indexCount)
 						(*sourceIndexSettings)[c.TargetIndexName] = (*sourceIndexSettings)[c.SourceIndexNames]
 						delete(*sourceIndexSettings, c.SourceIndexNames)
@@ -410,7 +411,7 @@ func main() {
 					if c.CopyIndexMappings {
 
 						//if there is only one index and we specify the dest indexname
-						if (c.SourceIndexNames != c.TargetIndexName && (len(c.TargetIndexName) > 0) && indexCount == 1) {
+						if c.SourceIndexNames != c.TargetIndexName && (len(c.TargetIndexName) > 0) && indexCount == 1 {
 							log.Debugf("only one index,so we can rewrite indexname, src:%v, dest:%v ,indexCount:%d", c.SourceIndexNames, c.TargetIndexName, indexCount)
 							(*sourceIndexMappings)[c.TargetIndexName] = (*sourceIndexMappings)[c.SourceIndexNames]
 							delete(*sourceIndexMappings, c.SourceIndexNames)
@@ -447,10 +448,18 @@ func main() {
 	if len(c.TargetEs) > 0 {
 		log.Debug("start es bulk workers")
 		outputBar.Prefix("Bulk")
+
+		_, _, targetIndexMappings, err := migrator.TargetESAPI.GetIndexMappings(c.CopyAllIndexes, c.SourceIndexNames)
+		if err != nil {
+			log.Error("error for fetch target targetIndexMappings")
+			return
+		}
+		fields := getMapping(targetIndexMappings)
+		log.Info("fields: %v", fields)
 		var docCount int
 		wg.Add(c.Workers)
 		for i := 0; i < c.Workers; i++ {
-			go migrator.NewBulkWorker(&docCount, outputBar, &wg)
+			go migrator.NewBulkWorker(&docCount, outputBar, &wg, fields)
 		}
 	} else if len(c.DumpOutFile) > 0 {
 		// start file write
@@ -532,4 +541,17 @@ func (c *Migrator) ClusterReady(api ESAPI) (*ClusterHealth, bool) {
 	}
 
 	return health, false
+}
+
+func getMapping(targetIndexMappings *Indexes) map[string]interface{} {
+	index := getFirstItem(*targetIndexMappings)
+	mappings := getFirstItem(index.(map[string]interface{}))
+	entity := getFirstItem(mappings.(map[string]interface{}))
+	properties := getFirstItem(entity.(map[string]interface{}))
+	return properties.(map[string]interface{})
+}
+
+func getFirstItem(m map[string]interface{}) interface{} {
+	keys := reflect.ValueOf(m).MapKeys()
+	return m[keys[0].String()]
 }
